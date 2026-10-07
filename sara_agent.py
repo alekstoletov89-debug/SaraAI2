@@ -879,6 +879,22 @@ def _tool_result_text(result):
     return result.get("error") or "Команда не выполнена."
 
 
+def compound_route(user_text):
+    """Выполняет простые составные Windows-команды последовательно, без Qwen/E5."""
+    parts = [p.strip() for p in re.split(r"\s+и\s+", user_text.strip(), flags=re.IGNORECASE) if p.strip()]
+    if len(parts) < 2:
+        return None
+
+    results = []
+    for part in parts:
+        result = universal_route(part)
+        if result is None:
+            return None
+        results.append(result)
+
+    return "\n".join(results)
+
+
 def universal_route(user_text):
     """Быстрый слой для очевидных Windows-команд и явных запросов свежей информации."""
     text = user_text.strip().lower()
@@ -1015,6 +1031,12 @@ def process(user_text):
         return fast_result
 
     # РўРѕР»СЊРєРѕ РµСЃР»Рё РєРѕРјР°РЅРґР° РЅРµ Р±С‹СЃС‚СЂР°СЏ вЂ” РїСЂРѕРІРµСЂСЏРµРј РєРѕРјР°РЅРґС‹ РїР°РјСЏС‚Рё.
+
+    compound_result = compound_route(user_text)
+    if compound_result:
+        add_history("user", user_text)
+        add_history("assistant", compound_result)
+        return compound_result
 
     universal_result = universal_route(user_text)
 
