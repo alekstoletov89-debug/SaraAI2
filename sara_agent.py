@@ -983,7 +983,7 @@ def universal_route(user_text):
         return _tool_result_text(execute_tool("windows_manager",
             {"action": "kill_pid", "pid": int(m.group(1))}))
 
-    if any(x in text for x in ("покажи окна", "покажи открытые окна", "список окон", "какие окна открыты")):
+    if any(x in text for x in ("покажи окна", "покажи открытые окна", "окажи окна", "список окон", "какие окна открыты")):
         result = execute_tool("windows_manager", {"action": "windows"})
         if result.get("ok"):
             windows = result.get("windows", [])
