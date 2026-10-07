@@ -255,7 +255,7 @@ def extract_json(text):
         return None
 
 
-def plan_tool(user_text, memory_context, history):
+def plan_tool(user_text, memory_context, history, tool_results=None):
     history_text = ""
 
     for item in history[-6:]:
@@ -266,22 +266,32 @@ def plan_tool(user_text, memory_context, history):
             f"{role}: {content}\n"
         )
 
+
+    executed_context = json.dumps(tool_results or [], ensure_ascii=False)
+
     prompt = f"""
-РўРµРєСѓС‰Р°СЏ РґР°С‚Р° Рё РІСЂРµРјСЏ:
+Текущая дата и время:
 {datetime.now().strftime("%d.%m.%Y %H:%M:%S")}
 
-Р”РѕР»РіРѕРІСЂРµРјРµРЅРЅР°СЏ РїР°РјСЏС‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ:
+Долговременная память:
 {memory_context}
 
-РќРµРґР°РІРЅРёР№ РґРёР°Р»РѕРі:
+Недавний диалог:
 {history_text}
 
-РќРѕРІРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ:
+Сообщение пользователя:
 {user_text}
 
-РћРїСЂРµРґРµР»Рё, РЅСѓР¶РµРЅ Р»Рё РёРЅСЃС‚СЂСѓРјРµРЅС‚.
-Р’РµСЂРЅРё С‚РѕР»СЊРєРѕ JSON.
+Уже выполненные инструменты:
+{executed_context}
+
+Если задача уже выполнена, верни только:
+{{"tool":"none","arguments":{{}}}}
+
+Иначе верни только JSON следующего инструмента.
+Не повторяй успешно выполненный тот же вызов без новой причины.
 """
+
 
     try:
         result = ollama_chat(
@@ -856,6 +866,123 @@ def fast_route(user_text):
         return result.get("result") if result.get("ok") else result.get("error")
     return None
 
+
+# ============================================================
+# UNIVERSAL ROUTER
+# ============================================================
+
+def _tool_result_text(result):
+    if not isinstance(result, dict):
+        return str(result)
+    if result.get("ok"):
+        return result.get("result") or "Готово."
+    return result.get("error") or "Команда не выполнена."
+
+
+def universal_route(user_text):
+    """Быстрый слой для очевидных Windows-команд и явных запросов свежей информации."""
+    text = user_text.strip().lower()
+    if not text:
+        return None
+
+    web_markers = (
+        "сегодня", "сейчас", "последние новости", "актуальные новости",
+        "новости", "курс доллара", "курс евро", "погода",
+        "сколько стоит сейчас", "цена сейчас",
+    )
+    if any(x in text for x in web_markers):
+        return _tool_result_text(execute_tool("web_search", {"query": user_text}))
+
+    if any(x in text for x in ("информация о системе", "информацию о системе",
+        "характеристики компьютера", "характеристики пк",
+        "данные о компьютере", "информация о компьютере")):
+        return _tool_result_text(execute_tool("windows_manager", {"action": "system"}))
+
+    if any(x in text for x in ("покажи процессы", "покажи процесс", "какие процессы",
+        "что грузит процессор", "что грузит цпу", "нагрузка на процессор",
+        "кто грузит процессор", "кто жрет процессор", "кто жрёт процессор")):
+        return _tool_result_text(execute_tool("windows_manager", {"action": "processes"}))
+
+    if "диск" in text and any(x in text for x in ("сколько", "свобод", "осталось", "места")):
+        drive = "C"
+        m = re.search(r"\b([c-f])\s*:?", text)
+        if m:
+            drive = m.group(1).upper()
+        return _tool_result_text(execute_tool("windows_manager", {"action": "disk", "drive": drive}))
+
+    if any(x in text for x in ("покажи сеть", "состояние сети", "состояние интернета",
+        "информация о сети", "состояние wifi", "состояние вайфай",
+        "покажи wifi", "покажи вайфай")):
+        return _tool_result_text(execute_tool("windows_manager",
+            {"action": "network", "network_action": "status"}))
+
+    if any(x in text for x in ("какой у меня ip", "какой у меня айпи", "мой ip", "мой айпи")):
+        return _tool_result_text(execute_tool("windows_manager",
+            {"action": "network", "network_action": "ip"}))
+
+    if any(x in text for x in ("покажи автозагрузку", "что в автозагрузке", "список автозагрузки")):
+        return _tool_result_text(execute_tool("windows_manager", {"action": "startup"}))
+
+    if any(x in text for x in ("покажи службы", "список служб", "службы windows", "службы виндовс")):
+        return _tool_result_text(execute_tool("windows_manager",
+            {"action": "service", "service_action": "list"}))
+
+    m = re.match(r"^(?:проверь|проверить)\s+(?:файл|папку)\s+(.+)$", text)
+    if m:
+        return _tool_result_text(execute_tool("windows_manager",
+            {"action": "file", "file_action": "exists", "path": m.group(1).strip()}))
+
+    if any(x in text for x in ("заблокируй компьютер", "заблокируй пк", "заблокируй виндовс")):
+        return _tool_result_text(execute_tool("windows_manager",
+            {"action": "power", "power_action": "lock"}))
+
+    if any(x in text for x in ("усыпи компьютер", "усыпи пк", "переведи компьютер в сон")):
+        return _tool_result_text(execute_tool("windows_manager",
+            {"action": "power", "power_action": "sleep"}))
+
+    if any(x in text for x in ("выключи компьютер", "выключи пк", "перезагрузи компьютер", "перезагрузи пк")):
+        action = "restart" if "перезагрузи" in text else "shutdown"
+        return _tool_result_text(execute_tool("windows_manager",
+            {"action": "power", "power_action": action}))
+
+    m = re.match(r"^(?:убей|заверши)\s+(?:процесс\s+)?([a-zа-я0-9_.-]+)$", text)
+    if m:
+        return _tool_result_text(execute_tool("windows_manager",
+            {"action": "kill_process", "name": m.group(1)}))
+
+    m = re.match(r"^(?:убей|заверши)\s+pid\s+(\d+)$", text)
+    if m:
+        return _tool_result_text(execute_tool("windows_manager",
+            {"action": "kill_pid", "pid": int(m.group(1))}))
+
+    if any(x in text for x in ("покажи окна", "покажи открытые окна", "список окон", "какие окна открыты")):
+        result = execute_tool("windows_manager", {"action": "windows"})
+        if result.get("ok"):
+            windows = result.get("windows", [])
+            if not windows:
+                return "Открытых окон не найдено."
+            return "Открытые окна:\n" + "\n".join(
+                f"- {w.get('title', '')}" for w in windows if w.get("title"))
+        return _tool_result_text(result)
+
+    for prefix, action in (("сверни ", "minimize"), ("разверни ", "maximize"),
+        ("активируй ", "activate"), ("переключись на ", "activate"),
+        ("закрой окно ", "close")):
+        if text.startswith(prefix):
+            target = text[len(prefix):].strip()
+            if target:
+                return _tool_result_text(execute_tool("windows_manager",
+                    {"action": "window", "window_action": action, "target": target}))
+
+    for prefix in ("открой ", "открыть ", "запусти ", "запустить "):
+        if text.startswith(prefix):
+            target = text[len(prefix):].strip()
+            if target:
+                return _tool_result_text(execute_tool("windows_manager",
+                    {"action": "open", "name": target}))
+
+    return None
+
 def process(user_text):
     user_text = user_text.strip()
 
@@ -879,6 +1006,14 @@ def process(user_text):
         return fast_result
 
     # РўРѕР»СЊРєРѕ РµСЃР»Рё РєРѕРјР°РЅРґР° РЅРµ Р±С‹СЃС‚СЂР°СЏ вЂ” РїСЂРѕРІРµСЂСЏРµРј РєРѕРјР°РЅРґС‹ РїР°РјСЏС‚Рё.
+
+    universal_result = universal_route(user_text)
+
+    if universal_result:
+        add_history("user", user_text)
+        add_history("assistant", universal_result)
+        return universal_result
+
     memory_result = handle_memory_command(
         user_text
     )
@@ -904,14 +1039,10 @@ def process(user_text):
 
     tool_results = []
 
-    # Qwen СЃР°Рј СЂРµС€Р°РµС‚, РЅСѓР¶РµРЅ Р»Рё РёРЅСЃС‚СЂСѓРјРµРЅС‚.
-    for step in range(MAX_TOOL_STEPS):
 
-        plan = plan_tool(
-            user_text,
-            memory_context,
-            history
-        )
+    # Qwen может выполнить цепочку до MAX_TOOL_STEPS инструментов.
+    for step in range(MAX_TOOL_STEPS):
+        plan = plan_tool(user_text, memory_context, history, tool_results)
 
         tool_name = plan.get("tool")
         arguments = plan.get("arguments", {})
@@ -919,10 +1050,15 @@ def process(user_text):
         if tool_name == "none":
             break
 
-        result = execute_tool(
-            tool_name,
-            arguments
-        )
+        if any(
+            item.get("tool") == tool_name
+            and item.get("arguments") == arguments
+            and item.get("result", {}).get("ok") is True
+            for item in tool_results
+        ):
+            break
+
+        result = execute_tool(tool_name, arguments)
 
         tool_results.append({
             "step": step + 1,
@@ -931,9 +1067,9 @@ def process(user_text):
             "result": result
         })
 
-        # РџРѕРєР° РёСЃРїРѕР»СЊР·СѓРµРј РјР°РєСЃРёРјСѓРј РѕРґРёРЅ РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°Р»СЊРЅС‹Р№
-        # РІС‹Р·РѕРІ РЅР° Р·Р°РїСЂРѕСЃ.
-        break
+        if not isinstance(result, dict) or not result.get("ok"):
+            break
+
 
     answer = final_answer(
         user_text,
