@@ -1,0 +1,819 @@
+from __future__ import annotations
+
+import os
+import re
+import json
+import time
+import ctypes
+import subprocess
+import shutil
+import socket
+import psutil
+from pathlib import Path
+
+# ?????? web-??????????? ?????????.
+try:
+    from tools_before_windows_manager import web_search, web_open
+except Exception:
+    def web_search(query):
+        return {"ok": False, "error": "web_search unavailable"}
+
+    def web_open(url):
+        return {"ok": False, "error": "web_open unavailable"}
+
+
+# ============================================================
+# WINDOWS MANAGER
+# ============================================================
+
+PROGRAMS = {
+    "???????????": "calc.exe",
+    "??????????? windows": "calc.exe",
+    "???????": "notepad.exe",
+    "?????????": "explorer.exe",
+    "????????? ?????": "taskmgr.exe",
+    "????????? ?????????": "devmgmt.msc",
+    "?????? ??????????": "control.exe",
+    "????????? ??????": "cmd.exe",
+    "cmd": "cmd.exe",
+    "powershell": "powershell.exe",
+    "paint": "mspaint.exe",
+    "?????????": "mspaint.exe",
+    "??????": "services.msc",
+    "?????????? ???????????": "compmgmt.msc",
+    "??????? ????????": "resmon.exe",
+    "??????": "regedit.exe",
+    "?????????? ??????????????????": "perfmon.exe",
+}
+
+
+SETTINGS = {
+    "?????????": "ms-settings:",
+    "?????????": "ms-settings:",
+    "????": "ms-settings:network",
+    "wifi": "ms-settings:network-wifi",
+    "wi-fi": "ms-settings:network-wifi",
+    "bluetooth": "ms-settings:bluetooth",
+    "????": "ms-settings:sound",
+    "?????": "ms-settings:display",
+    "???????": "ms-settings:display",
+    "??????????????": "ms-settings:personalization",
+    "??????????": "ms-settings:windowsupdate",
+    "??????????????????": "ms-settings:privacy",
+    "??????? ??????": "ms-settings:accounts",
+    "??????????": "ms-settings:appsfeatures",
+    "?????????": "ms-settings:storagesense",
+    "????": "ms-settings:mousetouchpad",
+    "??????????": "ms-settings:keyboard",
+    "??????": "ms-settings:privacy-webcam",
+    "????????": "ms-settings:privacy-microphone",
+    "???????": "ms-settings:powersleep",
+    "???? ? ?????": "ms-settings:dateandtime",
+    "????": "ms-settings:regionlanguage",
+}
+
+
+DANGEROUS_COMMANDS = (
+    "format ",
+    "diskpart",
+    "bcdedit",
+    "cipher /w",
+    "del /s /q c:\\",
+    "rd /s /q c:\\",
+    "remove-item c:\\",
+    "shutdown /s",
+    "shutdown /r",
+    "stop-computer",
+    "restart-computer",
+    "format-volume",
+    "clear-disk",
+)
+
+
+def _ok(result=None, **kwargs):
+    d = {"ok": True}
+    if result is not None:
+        d["result"] = result
+    d.update(kwargs)
+    return d
+
+
+def _error(message):
+    return {"ok": False, "error": str(message)}
+
+
+def _run_ps(command, timeout=30):
+    try:
+        p = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                command,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+
+        if p.returncode != 0:
+            return _error((p.stderr or p.stdout).strip())
+
+        return _ok((p.stdout or "").strip())
+    except Exception as e:
+        return _error(e)
+
+
+# ============================================================
+# PROGRAMS
+# ============================================================
+
+def windows_open_program(name):
+    name = str(name).strip().lower()
+
+    if name in PROGRAMS:
+        target = PROGRAMS[name]
+    else:
+        target = name
+
+    try:
+        subprocess.Popen(
+            target,
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return _ok(f"??????? ?????????: {name}")
+    except Exception as e:
+        return _error(e)
+
+
+def windows_open_any(name):
+    name = str(name).strip()
+
+    if name.lower() in PROGRAMS:
+        return windows_open_program(name)
+
+    if name.lower() in SETTINGS:
+        return windows_open_settings(name)
+
+    try:
+        os.startfile(name)
+        return _ok(f"???????: {name}")
+    except Exception:
+        pass
+
+    try:
+        subprocess.Popen(
+            name,
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return _ok(f"????????: {name}")
+    except Exception as e:
+        return _error(f"?? ??????? ???????: {name}: {e}")
+
+
+def windows_open_settings(name):
+    key = str(name).strip().lower()
+
+    uri = SETTINGS.get(key)
+
+    if not uri:
+        if key.startswith("ms-settings:"):
+            uri = key
+        else:
+            return _error(f"????????? Windows ?? ???????: {name}")
+
+    try:
+        os.startfile(uri)
+        return _ok(f"??????? ????????? Windows: {name}")
+    except Exception as e:
+        return _error(e)
+
+
+# ============================================================
+# WINDOWS / PROCESSES
+# ============================================================
+
+def windows_processes(filter_name=""):
+    try:
+        rows = []
+
+        needle = str(filter_name or "").strip().lower()
+
+        for p in psutil.process_iter(["pid", "name", "cpu_percent"]):
+            try:
+                name = p.info["name"] or ""
+
+                if needle and needle not in name.lower():
+                    continue
+
+                rows.append(
+                    (
+                        name,
+                        p.info["pid"],
+                        p.info["cpu_percent"] or 0,
+                    )
+                )
+            except Exception:
+                continue
+
+        rows.sort(key=lambda x: x[2], reverse=True)
+
+        if not rows:
+            return _error(f"??????? ?? ??????: {filter_name}")
+
+        lines = ["Name                         PID        CPU"]
+
+        for name, pid, cpu in rows[:40]:
+            lines.append(
+                f"{name[:28]:28} {pid:8} {cpu:8.1f}%"
+            )
+
+        return _ok("\n".join(lines))
+
+    except Exception as e:
+        return _error(e)
+
+
+def windows_kill_process(name):
+    name = str(name).strip().lower()
+
+    protected = {
+        "system",
+        "registry",
+        "smss.exe",
+        "csrss.exe",
+        "wininit.exe",
+        "winlogon.exe",
+        "services.exe",
+        "lsass.exe",
+    }
+
+    if name in protected:
+        return _error("?????????? ????????? ???????.")
+
+    killed = 0
+
+    for p in psutil.process_iter(["pid", "name"]):
+        try:
+            pname = (p.info["name"] or "").lower()
+
+            if pname == name or pname == name + ".exe":
+                p.terminate()
+                killed += 1
+        except Exception:
+            pass
+
+    return _ok(f"????????? ?????????: {killed}")
+
+
+def windows_taskkill_pid(pid):
+    try:
+        pid = int(pid)
+
+        if pid <= 4:
+            return _error("?????? ????????? ????????? PID.")
+
+        p = psutil.Process(pid)
+        name = p.name()
+
+        p.terminate()
+
+        try:
+            p.wait(timeout=3)
+        except psutil.TimeoutExpired:
+            p.kill()
+
+        return _ok(f"??????? ????????: {name} ({pid})")
+
+    except psutil.NoSuchProcess:
+        return _error(f"??????? PID {pid} ?? ??????.")
+    except Exception as e:
+        return _error(e)
+
+
+# ============================================================
+# WINDOWS
+# ============================================================
+
+def windows_list_windows():
+    windows = []
+
+    EnumWindows = ctypes.windll.user32.EnumWindows
+    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
+    GetWindowTextLengthW = ctypes.windll.user32.GetWindowTextLengthW
+    GetWindowTextW = ctypes.windll.user32.GetWindowTextW
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_bool,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    )
+
+    def callback(hwnd, lparam):
+        if not IsWindowVisible(hwnd):
+            return True
+
+        length = GetWindowTextLengthW(hwnd)
+
+        if length:
+            buf = ctypes.create_unicode_buffer(length + 1)
+            GetWindowTextW(hwnd, buf, length + 1)
+
+            title = buf.value.strip()
+
+            if title:
+                windows.append(
+                    {
+                        "hwnd": int(hwnd),
+                        "title": title,
+                    }
+                )
+
+        return True
+
+    EnumWindows(WNDENUMPROC(callback), 0)
+
+    return _ok(windows=windows)
+
+
+def windows_control_window(action, target):
+    target = str(target).strip().lower()
+
+    result = windows_list_windows()
+
+    if not result["ok"]:
+        return result
+
+    matches = [
+        w for w in result["windows"]
+        if target in w["title"].lower()
+    ]
+
+    if not matches:
+        return _error(f"???? ?? ???????: {target}")
+
+    hwnd = matches[0]["hwnd"]
+    user32 = ctypes.windll.user32
+
+    SW_MINIMIZE = 6
+    SW_RESTORE = 9
+    SW_MAXIMIZE = 3
+
+    if action in ("??????", "minimize"):
+        user32.ShowWindow(hwnd, SW_MINIMIZE)
+
+    elif action in ("????????", "restore"):
+        user32.ShowWindow(hwnd, SW_RESTORE)
+
+    elif action in ("????????????", "maximize"):
+        user32.ShowWindow(hwnd, SW_MAXIMIZE)
+
+    elif action in ("?????????", "activate", "???????????"):
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+
+    elif action in ("??????", "close"):
+        WM_CLOSE = 0x0010
+        user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+
+    else:
+        return _error(f"??????????? ???????? ? ?????: {action}")
+
+    return _ok(f"???? ??????????: {matches[0]['title']}")
+
+
+# ============================================================
+# AUDIO
+# ============================================================
+
+def windows_audio(action="status", value=None):
+    try:
+        from pycaw.pycaw import AudioUtilities
+
+        devices = AudioUtilities.GetSpeakers()
+
+        if hasattr(devices, "EndpointVolume"):
+            volume = devices.EndpointVolume
+        else:
+            from pycaw.pycaw import IAudioEndpointVolume
+            from comtypes import CLSCTX_ALL
+            interface = devices.Activate(
+                IAudioEndpointVolume._iid_,
+                CLSCTX_ALL,
+                None,
+            )
+            volume = interface.QueryInterface(IAudioEndpointVolume)
+
+        current = round(volume.GetMasterVolumeLevelScalar() * 100)
+
+        if action == "status":
+            return _ok(f"Громкость: {current}%. Mute: {bool(volume.GetMute())}")
+
+        if action == "set":
+            level = max(0, min(100, int(value)))
+            volume.SetMasterVolumeLevelScalar(level / 100, None)
+            return _ok(f"Громкость установлена: {level}%.")
+
+        if action == "up":
+            level = max(0, min(100, current + int(value or 10)))
+            volume.SetMasterVolumeLevelScalar(level / 100, None)
+            return _ok(f"Громкость увеличена до {level}%.")
+
+        if action == "down":
+            level = max(0, min(100, current - int(value or 10)))
+            volume.SetMasterVolumeLevelScalar(level / 100, None)
+            return _ok(f"Громкость уменьшена до {level}%.")
+
+        if action == "mute":
+            volume.SetMute(1, None)
+            return _ok("Звук выключен.")
+
+        if action == "unmute":
+            volume.SetMute(0, None)
+            return _ok("Звук включён.")
+
+        return _error(f"Неизвестное действие audio: {action}")
+
+    except Exception as e:
+        return _error(e)
+
+
+# ============================================================
+# DISK / SYSTEM
+# ============================================================
+
+def disk_free_space(drive="C"):
+    drive = str(drive).strip().upper().rstrip(":")
+    root = drive + ":\\"
+
+    try:
+        usage = shutil.disk_usage(root)
+        gb = round(usage.free / 1_000_000_000, 1)
+        gib = round(usage.free / 1024**3, 1)
+
+        return _ok(
+            f"?? ????? {drive}: ???????? {gb} ??.",
+            drive=drive,
+            free_bytes=usage.free,
+            free_gb=gb,
+            free_gib=gib,
+        )
+
+    except Exception as e:
+        return _error(e)
+
+
+def windows_system_info():
+    try:
+        memory = psutil.virtual_memory()
+        disk = shutil.disk_usage("C:\\")
+
+        return _ok(
+            json.dumps(
+                {
+                    "computer": socket.gethostname(),
+                    "cpu": os.cpu_count(),
+                    "ram_gb": round(memory.total / 1024**3, 1),
+                    "ram_free_gb": round(memory.available / 1024**3, 1),
+                    "disk_c_free_gb": round(disk.free / 1_000_000_000, 1),
+                    "windows": subprocess.check_output(
+                        ["cmd", "/c", "ver"],
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                    ).strip(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+
+    except Exception as e:
+        return _error(e)
+
+
+# ============================================================
+# NETWORK
+# ============================================================
+
+def windows_network(action="status"):
+    if action == "status":
+        return _run_ps(
+            "Get-NetAdapter | "
+            "Where-Object {$_.Status -eq 'Up'} | "
+            "Select-Object Name,InterfaceDescription,LinkSpeed | "
+            "Format-Table -AutoSize | Out-String"
+        )
+
+    if action == "ip":
+        return _run_ps(
+            "Get-NetIPAddress -AddressFamily IPv4 | "
+            "Where-Object {$_.IPAddress -notlike '127.*'} | "
+            "Select-Object InterfaceAlias,IPAddress | "
+            "Format-Table -AutoSize | Out-String"
+        )
+
+    if action == "wifi":
+        return _run_ps(
+            "netsh wlan show interfaces"
+        )
+
+    if action == "flush_dns":
+        return _run_ps("ipconfig /flushdns")
+
+    if action == "release_ip":
+        return _run_ps("ipconfig /release")
+
+    if action == "renew_ip":
+        return _run_ps("ipconfig /renew", timeout=60)
+
+    return _error(f"??????????? ???????? ????: {action}")
+
+
+# ============================================================
+# SERVICES
+# ============================================================
+
+def windows_services(action="list", name=""):
+    if action == "list":
+        return _run_ps(
+            "Get-Service | "
+            "Sort-Object Status,DisplayName | "
+            "Select-Object -First 80 Name,DisplayName,Status | "
+            "Format-Table -AutoSize | Out-String"
+        )
+
+    if not name:
+        return _error("?? ??????? ??????.")
+
+    safe = str(name).replace("'", "''")
+
+    if action == "status":
+        return _run_ps(
+            f"Get-Service -Name '{safe}' | "
+            "Select-Object Name,DisplayName,Status | "
+            "Format-List | Out-String"
+        )
+
+    if action == "start":
+        return _run_ps(
+            f"Start-Service -Name '{safe}'"
+        )
+
+    if action == "stop":
+        return _run_ps(
+            f"Stop-Service -Name '{safe}'"
+        )
+
+    if action == "restart":
+        return _run_ps(
+            f"Restart-Service -Name '{safe}'"
+        )
+
+    return _error(f"??????????? ???????? ??????: {action}")
+
+
+# ============================================================
+# STARTUP
+# ============================================================
+
+def windows_startup():
+    return _run_ps(
+        "Get-CimInstance Win32_StartupCommand | "
+        "Select-Object Name,Command,Location,User | "
+        "Format-List | Out-String"
+    )
+
+
+# ============================================================
+# POWER
+# ============================================================
+
+def windows_power(action):
+    if action == "lock":
+        ctypes.windll.user32.LockWorkStation()
+        return _ok("????????? ????????????.")
+
+    if action == "sleep":
+        return _run_ps(
+            "rundll32.exe powrprof.dll,SetSuspendState 0,1,0"
+        )
+
+    if action == "shutdown":
+        return _error(
+            "?????????? ????????? ????? ?????? ??????????. "
+            "??? ????????????? ??????????? ?????????? ???????."
+        )
+
+    if action == "restart":
+        return _error(
+            "???????????? ????????? ????? ?????? ??????????. "
+            "??? ????????????? ??????????? ?????????? ???????."
+        )
+
+    return _error(f"??????????? ???????? ???????: {action}")
+
+
+# ============================================================
+# FILES
+# ============================================================
+
+def windows_file(action, path="", destination=""):
+    path = os.path.expandvars(os.path.expanduser(str(path)))
+
+    if action == "exists":
+        return _ok(
+            f"{path}: {'??????????' if os.path.exists(path) else '?? ??????????'}"
+        )
+
+    if action == "open":
+        return windows_open_any(path)
+
+    if action == "list":
+        try:
+            items = []
+
+            for p in Path(path).iterdir():
+                items.append(
+                    {
+                        "name": p.name,
+                        "type": "dir" if p.is_dir() else "file",
+                        "size": p.stat().st_size if p.is_file() else None,
+                    }
+                )
+
+            return _ok(json.dumps(items, ensure_ascii=False, indent=2))
+
+        except Exception as e:
+            return _error(e)
+
+    if action == "copy":
+        try:
+            shutil.copy2(path, destination)
+            return _ok(f"???????????: {destination}")
+        except Exception as e:
+            return _error(e)
+
+    if action == "move":
+        try:
+            shutil.move(path, destination)
+            return _ok(f"??????????: {destination}")
+        except Exception as e:
+            return _error(e)
+
+    return _error(f"??????????? ???????? ?????: {action}")
+
+
+# ============================================================
+# POWERSHELL
+# ============================================================
+
+def powershell(command):
+    command = str(command).strip()
+    lower = command.lower()
+
+    for dangerous in DANGEROUS_COMMANDS:
+        if dangerous in lower:
+            return _error("??????? ????????????? ????????? ????????????.")
+
+    return _run_ps(command, timeout=60)
+
+
+# ============================================================
+# UNIVERSAL WINDOWS MANAGER
+# ============================================================
+
+def windows_manager(action, **kwargs):
+    action = str(action).strip().lower()
+
+    routes = {
+        "open_program": lambda: windows_open_program(kwargs.get("name", "")),
+        "open": lambda: windows_open_any(kwargs.get("name", "")),
+        "settings": lambda: windows_open_settings(kwargs.get("name", "")),
+
+        "processes": lambda: windows_processes(
+            kwargs.get("filter_name", "")
+        ),
+        "kill_process": lambda: windows_kill_process(
+            kwargs.get("name", "")
+        ),
+        "kill_pid": lambda: windows_taskkill_pid(
+            kwargs.get("pid")
+        ),
+
+        "windows": lambda: windows_list_windows(),
+        "window": lambda: windows_control_window(
+            kwargs.get("window_action", "activate"),
+            kwargs.get("target", ""),
+        ),
+
+        "audio": lambda: windows_audio(
+            kwargs.get("audio_action", "status"),
+            kwargs.get("value"),
+        ),
+
+        "disk": lambda: disk_free_space(
+            kwargs.get("drive", "C")
+        ),
+
+        "system": lambda: windows_system_info(),
+
+        "network": lambda: windows_network(
+            kwargs.get("network_action", "status")
+        ),
+
+        "service": lambda: windows_services(
+            kwargs.get("service_action", "status"),
+            kwargs.get("name", ""),
+        ),
+
+        "startup": lambda: windows_startup(),
+
+        "power": lambda: windows_power(
+            kwargs.get("power_action", "")
+        ),
+
+        "file": lambda: windows_file(
+            kwargs.get("file_action", "exists"),
+            kwargs.get("path", ""),
+            kwargs.get("destination", ""),
+        ),
+
+        "powershell": lambda: powershell(
+            kwargs.get("command", "")
+        ),
+    }
+
+    fn = routes.get(action)
+
+    if not fn:
+        return _error(f"??????????? ???????? Windows Manager: {action}")
+
+    try:
+        return fn()
+    except Exception as e:
+        return _error(e)
+
+
+# ============================================================
+# TOOL REGISTRY
+# ============================================================
+
+TOOLS = {
+    "windows_manager": windows_manager,
+
+    "windows_open_program": windows_open_program,
+    "windows_open_any": windows_open_any,
+    "windows_open_settings": windows_open_settings,
+
+    "windows_processes": windows_processes,
+    "windows_kill_process": windows_kill_process,
+    "windows_taskkill_pid": windows_taskkill_pid,
+
+    "windows_list_windows": windows_list_windows,
+    "windows_control_window": windows_control_window,
+
+    "windows_audio": windows_audio,
+
+    "disk_free_space": disk_free_space,
+    "windows_system_info": windows_system_info,
+
+    "windows_network": windows_network,
+    "windows_services": windows_services,
+    "windows_startup": windows_startup,
+    "windows_power": windows_power,
+    "windows_file": windows_file,
+
+    "powershell": powershell,
+
+    "web_search": web_search,
+    "web_open": web_open,
+}
+
+
+def execute_tool(name, arguments=None):
+    arguments = arguments or {}
+
+    tool = TOOLS.get(name)
+
+    if not tool:
+        return _error(f"??????????? ??????????: {name}")
+
+    try:
+        return tool(**arguments)
+    except TypeError:
+        try:
+            return tool(arguments)
+        except Exception as e:
+            return _error(e)
+    except Exception as e:
+        return _error(e)
