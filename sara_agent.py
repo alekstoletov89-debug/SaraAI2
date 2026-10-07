@@ -9,6 +9,7 @@ import requests
 from core.memory_commands import handle_memory_command
 from core.semantic_memory import search_memories
 from tools import execute_tool, TOOLS
+from tts import speak
 
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
@@ -1189,6 +1190,9 @@ def main():
                 answer
             )
             print()
+
+            # Голосовой ответ — после полного текстового ответа.
+            speak(answer)
 
         except Exception as e:
             print(
