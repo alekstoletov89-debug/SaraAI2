@@ -67,7 +67,7 @@ def speak(text):
             language=LANGUAGE,
             speaker=SPEAKER,
             instruct="Говори естественно, тепло и спокойно, как персональный голосовой помощник.",
-            max_new_tokens=2048,
+            max_new_tokens=512,
         )
 
         with tempfile.NamedTemporaryFile(
