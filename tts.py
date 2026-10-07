@@ -7,6 +7,7 @@ The model is loaded lazily on the first response and kept in memory.
 import os
 import tempfile
 import threading
+import time
 
 _TTS = None
 _TTS_LOCK = threading.Lock()
@@ -35,12 +36,14 @@ def _load():
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA для Qwen3-TTS недоступна.")
 
+        t0 = time.perf_counter()
         _TTS = Qwen3TTSModel.from_pretrained(
             MODEL_PATH,
             device_map="cuda:0",
             dtype=torch.bfloat16,
             attn_implementation="sdpa",
         )
+        print(f"[TTS] Загрузка модели: {time.perf_counter() - t0:.2f} сек.")
 
     return _TTS
 
@@ -52,7 +55,6 @@ def speak(text):
     if not text:
         return False
 
-    # Не озвучиваем служебные/слишком длинные ответы целиком.
     if len(text) > 1800:
         text = text[:1800].rsplit(" ", 1)[0] + "..."
 
@@ -62,6 +64,7 @@ def speak(text):
 
         tts = _load()
 
+        t0 = time.perf_counter()
         wavs, sr = tts.generate_custom_voice(
             text=text,
             language=LANGUAGE,
@@ -69,6 +72,8 @@ def speak(text):
             instruct="Говори естественно, тепло и спокойно, как персональный голосовой помощник.",
             max_new_tokens=512,
         )
+        generation_time = time.perf_counter() - t0
+        print(f"[TTS] Генерация: {generation_time:.2f} сек.")
 
         with tempfile.NamedTemporaryFile(
             suffix=".wav",
@@ -78,8 +83,10 @@ def speak(text):
             path = f.name
 
         try:
+            t0 = time.perf_counter()
             sf.write(path, wavs[0], sr)
             winsound.PlaySound(path, winsound.SND_FILENAME)
+            print(f"[TTS] Сохранение + воспроизведение: {time.perf_counter() - t0:.2f} сек.")
         finally:
             try:
                 os.remove(path)
