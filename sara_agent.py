@@ -933,7 +933,10 @@ def universal_route(user_text):
         m = re.search(r"\b([c-f])\s*:?", text)
         if m:
             drive = m.group(1).upper()
-        return _tool_result_text(execute_tool("windows_manager", {"action": "disk", "drive": drive}))
+        result = execute_tool("windows_manager", {"action": "disk", "drive": drive})
+        if result.get("ok") and result.get("free_gb") is not None:
+            return f"На диске {drive}: свободно {result['free_gb']} ГБ."
+        return _tool_result_text(result)
 
     if any(x in text for x in ("покажи сеть", "состояние сети", "состояние интернета",
         "информация о сети", "состояние wifi", "состояние вайфай",
@@ -999,10 +1002,29 @@ def universal_route(user_text):
                 return _tool_result_text(execute_tool("windows_manager",
                     {"action": "window", "window_action": action, "target": target}))
 
+    # Надёжное открытие базовых Windows-программ без зависимости от словаря PROGRAMS.
+    direct_programs = {
+        "калькулятор": "calc.exe",
+        "калькулятор windows": "calc.exe",
+        "блокнот": "notepad.exe",
+        "проводник": "explorer.exe",
+        "диспетчер задач": "taskmgr.exe",
+        "диспетчер устройств": "devmgmt.msc",
+        "панель управления": "control.exe",
+        "cmd": "cmd.exe",
+        "командная строка": "cmd.exe",
+        "powershell": "powershell.exe",
+    }
+
     for prefix in ("открой ", "открыть ", "запусти ", "запустить "):
         if text.startswith(prefix):
             target = text[len(prefix):].strip()
             if target:
+                if target in direct_programs:
+                    return _tool_result_text(execute_tool(
+                        "powershell",
+                        {"command": f"Start-Process '{direct_programs[target]}'"}
+                    ))
                 return _tool_result_text(execute_tool("windows_manager",
                     {"action": "open", "name": target}))
 
