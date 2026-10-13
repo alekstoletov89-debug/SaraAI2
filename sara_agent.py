@@ -1031,29 +1031,58 @@ def universal_route(user_text):
 
     return None
 
+def _needs_tool_planner(user_text):
+    """Use the tool planner only for likely actions, not ordinary conversation."""
+    text = user_text.lower().strip()
+    action_words = (
+        "открой", "открыть", "запусти", "запустить", "закрой", "закрыть",
+        "сверни", "разверни", "активируй", "переключись", "покажи",
+        "проверь", "найди файл", "скопируй", "перемести", "удали файл",
+        "заверши процесс", "убей процесс", "останови службу", "запусти службу",
+        "перезагрузи", "выключи компьютер", "выключи пк", "заблокируй",
+        "поставь громкость", "громкость", "сеть", "ip-адрес", "айпи",
+        "автозагрузка", "службы windows", "свободного места", "свободно места",
+        "powershell", "выполни команду", "погода", "новости", "курс доллара",
+        "поищи в интернете", "найди в интернете", "открой сайт"
+    )
+    return any(word in text for word in action_words)
+
+
+def _conversation_answer(user_text, history, memory_context=""):
+    """Single Qwen call for normal dialogue; avoids E5 and the tool-planner round trip."""
+    messages = [{
+        "role": "system",
+        "content": (
+            "Ты Сара, локальный персональный помощник. Отвечай по-русски, "
+            "естественно, кратко и по делу. Не выдумывай факты и не утверждай, "
+            "что выполняла действия, которых не было. Если контекста недостаточно, "
+            "задай один конкретный вопрос."
+        )
+    }]
+    if memory_context:
+        messages.append({
+            "role": "system",
+            "content": "Полезные сведения из долговременной памяти; используй только если уместно:\n" + memory_context
+        })
+    for item in history[-8:]:
+        role = item.get("role")
+        content = item.get("content")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": str(content)})
+    messages.append({"role": "user", "content": user_text})
+    return ollama_chat(messages, temperature=0.35)
+
+
 def process(user_text):
     user_text = user_text.strip()
-
     if not user_text:
         return ""
 
-    # Р‘С‹СЃС‚СЂС‹Р№ РјР°СЂС€СЂСѓС‚ вЂ” СЂР°РЅСЊС€Рµ РїР°РјСЏС‚Рё, E5 Рё Qwen.
     fast_result = fast_route(user_text)
-
     if fast_result:
-        add_history(
-            "user",
-            user_text
-        )
-
-        add_history(
-            "assistant",
-            fast_result
-        )
-
-        return fast_result
-
-    # РўРѕР»СЊРєРѕ РµСЃР»Рё РєРѕРјР°РЅРґР° РЅРµ Р±С‹СЃС‚СЂР°СЏ вЂ” РїСЂРѕРІРµСЂСЏРµРј РєРѕРјР°РЅРґС‹ РїР°РјСЏС‚Рё.
+        add_history("user", user_text)
+        add_history("assistant", str(fast_result))
+        return str(fast_result)
 
     compound_result = compound_route(user_text)
     if compound_result:
@@ -1062,86 +1091,63 @@ def process(user_text):
         return compound_result
 
     universal_result = universal_route(user_text)
-
     if universal_result:
         add_history("user", user_text)
         add_history("assistant", universal_result)
         return universal_result
 
-    memory_result = handle_memory_command(
-        user_text
-    )
-
+    memory_result = handle_memory_command(user_text)
     if memory_result:
-        add_history(
-            "user",
-            user_text
-        )
-
-        add_history(
-            "assistant",
-            memory_result
-        )
-
+        add_history("user", user_text)
+        add_history("assistant", memory_result)
         return memory_result
 
     history = load_history()
+    lower = user_text.lower()
+    asks_memory = any(marker in lower for marker in (
+        "помнишь", "что ты знаешь обо мне", "что ты помнишь",
+        "я рассказывал", "мы обсуждали", "мои предпочтения",
+        "что я говорил", "вспомни"
+    ))
 
-    memory_context = get_memory_context(
-        user_text
-    )
+    # Обычный разговор: один вызов Qwen, без E5 и планировщика инструментов.
+    if not _needs_tool_planner(user_text):
+        memory_context = get_memory_context(user_text) if asks_memory else ""
+        answer = _conversation_answer(user_text, history, memory_context)
+        add_history("user", user_text)
+        add_history("assistant", answer)
+        return answer
 
+    # Планирование инструментов запускается только для запросов, похожих на действия.
+    memory_context = get_memory_context(user_text)
     tool_results = []
-
-
-    # Qwen может выполнить цепочку до MAX_TOOL_STEPS инструментов.
     for step in range(MAX_TOOL_STEPS):
         plan = plan_tool(user_text, memory_context, history, tool_results)
-
         tool_name = plan.get("tool")
         arguments = plan.get("arguments", {})
-
         if tool_name == "none":
             break
-
         if any(
             item.get("tool") == tool_name
             and item.get("arguments") == arguments
-            and item.get("result", {}).get("ok") is True
+            and isinstance(item.get("result"), dict)
+            and item["result"].get("ok") is True
             for item in tool_results
         ):
             break
-
         result = execute_tool(tool_name, arguments)
-
         tool_results.append({
             "step": step + 1,
             "tool": tool_name,
             "arguments": arguments,
             "result": result
         })
-
         if not isinstance(result, dict) or not result.get("ok"):
             break
 
-
-    answer = final_answer(
-        user_text,
-        memory_context,
-        history,
-        tool_results
-    )
-
-    add_history(
-        "user",
-        user_text
-    )
-
-    add_history(
-        "assistant",
-        answer
-    )
-
+    answer = final_answer(user_text, memory_context, history, tool_results)
+    add_history("user", user_text)
+    add_history("assistant", answer)
     return answer
 
 
