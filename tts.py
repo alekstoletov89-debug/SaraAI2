@@ -14,7 +14,7 @@ _TTS_LOCK = threading.Lock()
 
 MODEL_PATH = os.getenv(
     "SARA_TTS_MODEL",
-    "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
 )
 SPEAKER = "Serena"
 LANGUAGE = "Russian"
@@ -64,13 +64,17 @@ def speak(text):
 
         tts = _load()
 
+        # Коротким ответам не нужен большой лимит акустических токенов.
+        # 12 Hz: для коротких реплик меньший предел уменьшает лишнее ожидание.
+        max_new_tokens = min(256, max(80, int(len(text) * 1.8)))
+
         t0 = time.perf_counter()
         wavs, sr = tts.generate_custom_voice(
             text=text,
             language=LANGUAGE,
             speaker=SPEAKER,
-            instruct="Говори естественно, тепло и спокойно, как персональный голосовой помощник.",
-            max_new_tokens=256,
+            instruct="Говори естественно и спокойно.",
+            max_new_tokens=max_new_tokens,
         )
         generation_time = time.perf_counter() - t0
         print(f"[TTS] Генерация: {generation_time:.2f} сек.")
@@ -85,8 +89,11 @@ def speak(text):
         try:
             t0 = time.perf_counter()
             sf.write(path, wavs[0], sr)
+            print(f"[TTS] Сохранение WAV: {time.perf_counter() - t0:.2f} сек.")
+
+            t0 = time.perf_counter()
             winsound.PlaySound(path, winsound.SND_FILENAME)
-            print(f"[TTS] Сохранение + воспроизведение: {time.perf_counter() - t0:.2f} сек.")
+            print(f"[TTS] Воспроизведение: {time.perf_counter() - t0:.2f} сек.")
         finally:
             try:
                 os.remove(path)
