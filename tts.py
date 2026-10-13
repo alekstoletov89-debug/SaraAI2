@@ -55,8 +55,8 @@ def speak(text):
     if not text:
         return False
 
-    if len(text) > 1800:
-        text = text[:1800].rsplit(" ", 1)[0] + "..."
+    if len(text) > 700:
+        text = text[:700].rsplit(" ", 1)[0] + "..."
 
     try:
         import soundfile as sf
@@ -70,7 +70,7 @@ def speak(text):
             language=LANGUAGE,
             speaker=SPEAKER,
             instruct="Говори естественно, тепло и спокойно, как персональный голосовой помощник.",
-            max_new_tokens=512,
+            max_new_tokens=256,
         )
         generation_time = time.perf_counter() - t0
         print(f"[TTS] Генерация: {generation_time:.2f} сек.")
