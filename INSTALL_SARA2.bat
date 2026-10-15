@@ -34,8 +34,9 @@ if not exist "%ROOT%START_SARA2.bat" (
 )
 set "SARA_SHORTCUT=%USERPROFILE%\Desktop\SaraAI2.lnk"
 set "SARA_TARGET=%ROOT%START_SARA2.bat"
+set "SARA_ROOT=%ROOT%"
 set "SARA_ICON=%SystemRoot%\System32\shell32.dll,220"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($env:SARA_SHORTCUT); $s.TargetPath=$env:SARA_TARGET; $s.WorkingDirectory=$env:USERPROFILE; $s.IconLocation=$env:SARA_ICON; $s.Description='SaraAI2 local assistant'; $s.Save()"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($env:SARA_SHORTCUT); $s.TargetPath=$env:SARA_TARGET; $s.WorkingDirectory=$env:SARA_ROOT; $s.IconLocation=$env:SARA_ICON; $s.Description='SaraAI2 local assistant'; $s.Save()"
 if errorlevel 1 goto fail
 echo.
 echo Установка завершена. Ярлык SaraAI2 создан на рабочем столе.
