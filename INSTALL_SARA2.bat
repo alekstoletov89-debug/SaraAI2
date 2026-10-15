@@ -26,7 +26,10 @@ if errorlevel 1 (
 )
 if not exist "%PY%" (
   py -3.11 -m venv "%ROOT%.venv"
-  if errorlevel 1 py -3.12 -m venv "%ROOT%.venv"
+  if errorlevel 1 (
+    if exist "%ROOT%.venv" rmdir /s /q "%ROOT%.venv"
+    py -3.12 -m venv "%ROOT%.venv"
+  )
 )
 if not exist "%PY%" (
   echo Не удалось создать виртуальное окружение Python 3.11/3.12.
@@ -54,7 +57,10 @@ if errorlevel 1 goto fail
 echo.
 echo Установка и проверка синтаксиса завершены.
 echo Ярлык SaraAI2 создан на рабочем столе.
-echo Важно: Ollama и модель qwen3.5:9b должны быть установлены отдельно.
+echo Важно: это промежуточная текстовая сборка, не полный голосовой контур.
+echo Ollama и модель qwen3.5:9b должны быть установлены отдельно.
+echo Если возникла ошибка, запусти CHECK_SARA2.bat и пришли SARA2_DIAGNOSTICS.txt.
+echo Память проекта и история известных проблем: SARA2_PROJECT_MEMORY.md
 echo.
 pause
 exit /b 0
