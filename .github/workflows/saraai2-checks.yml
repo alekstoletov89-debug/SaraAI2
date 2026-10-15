@@ -16,6 +16,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements-sara2.txt
       - name: Compile application
-        run: python -m py_compile sara2_local.py
+        run: python -m py_compile sara2_local.py sara_agent.py tools.py tts.py
+      - name: Verify recovery files
+        run: |
+          python -c "from pathlib import Path; required=['CHECK_SARA2.bat','SARA2_PROJECT_MEMORY.md','README_BUILD_STATUS.md']; missing=[p for p in required if not Path(p).is_file()]; print('Missing:', missing); raise SystemExit(bool(missing))"
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
