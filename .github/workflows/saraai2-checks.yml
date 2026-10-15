@@ -1,0 +1,21 @@
+name: SaraAI2 checks
+on:
+  push:
+    branches: [saraai2-oneclick-repair]
+  pull_request:
+    branches: [saraai2-oneclick-repair]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install -r requirements-sara2.txt
+      - name: Compile application
+        run: python -m py_compile sara2_local.py
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
